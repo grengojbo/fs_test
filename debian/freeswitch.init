@@ -1,4 +1,5 @@
-#! /bin/sh
+#! /bin/bash
+
 ### BEGIN INIT INFO
 # Provides:          freeswitch
 # Required-Start:    $network $local_fs $remote_fs
@@ -9,37 +10,33 @@
 # Description:       An advanced platform for voice services
 ### END INIT INFO
 
-# Author: Anthony Minesalle II <anthm@freeswitch.org>
-#
-
 # Do NOT "set -e"
+# Before editing read
+# http://refspecs.linuxfoundation.org/LSB_4.1.0/LSB-Core-generic/LSB-Core-generic/iniscrptact.html
+
+# Author: Alfredo Palhares <masterkorp@masterkorp.net>
 
 # PATH should only include /usr/* if it runs after the mountnfs.sh script
-PATH=/sbin:/usr/sbin:/bin:/usr/bin:/opt/freeswitch/bin
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="FreeSWITCH Voice Switching System"
 NAME=freeswitch
-DAEMON=/opt/freeswitch/bin/$NAME
+DAEMON=/usr/bin/$NAME
 USER=freeswitch
-PIDFILE=/opt/freeswitch/run/$NAME.pid
+GROUP=daemon
+PIDFILE=/var/run/$NAME/$NAME.pid
+RUNDIR=/var/run/freeswitch
 SCRIPTNAME=/etc/init.d/$NAME
-WORKDIR=/opt/$NAME
 
-# Check if we are being executed by init
-
-CALLEDSCRIPT=`basename $0`
-
-if [ -r /etc/default/$NAME ]; then . /etc/default/$NAME; fi                                           
-
-if [ "$FREESWITCH_ENABLED" != "true" ]; then 
-    echo "$DESC not enabled yet. Edit /etc/default/$NAME first."
-    exit 0 ;
-fi
-
-# Exit if the package is not installed
-# [ -x "$DAEMON" ] || exit 0
 
 # Read configuration variable file if it is present
-[ -r /etc/default/$NAME ] && . /etc/default/$NAME
+if [ -r /etc/default/$NAME ]; then 
+  . /etc/default/$NAME 
+fi                                           
+
+if [ "$FREESWITCH_ENABLED" != "true" ]; then 
+  echo "$DESC not enabled yet. Edit /etc/default/$NAME first."
+  exit 0
+fi
 
 # Load the VERBOSE setting and other rcS variables
 . /lib/init/vars.sh
@@ -52,133 +49,143 @@ fi
 # Function that sets ulimit values for the daemon
 #
 do_setlimits() {
-        ulimit -c unlimited
-        ulimit -d unlimited
-        ulimit -f unlimited
-#        ulimit -i unlimited
-        ulimit -n 999999
-#        ulimit -q unlimited
-#        ulimit -u unlimited
-        ulimit -v unlimited
-#        ulimit -x unlimited
-        ulimit -s 240
-        ulimit -l unlimited
-        return 0
+  ulimit -c unlimited
+  ulimit -d unlimited
+  ulimit -f unlimited
+  ulimit -n 999999
+  ulimit -v unlimited
+  ulimit -s 240
+  ulimit -l unlimited
+  return 0
 }
 
 #
 # Function that starts the daemon/service
 #
-do_start()
-{
-	# Return
-	#   0 if daemon has been started
-	#   1 if daemon was already running
-	#   2 if daemon could not be started
-	start-stop-daemon -d $WORKDIR -c $USER --start --quiet --pidfile $PIDFILE --exec $DAEMON --test > /dev/null \
-		|| return 1
-	do_setlimits
-	start-stop-daemon -d $WORKDIR -c $USER --start --quiet --pidfile $PIDFILE --exec $DAEMON -- \
-		$FREESWITCH_PARAMS \
-		|| return 2
-	# Add code here, if necessary, that waits for the process to be ready
-	# to handle requests from services started subsequently which depend
-	# on this one.  As a last resort, sleep for some time.
+do_start() {
+  do_status >/dev/null 2>&1; state=$?;
+  if ((state == 3)); then
+    do_setlimits
+    $DAEMON -u $USER -g $GROUP $FREESWITCH_PARAMS
+  else
+    echo -e "\r"
+    log_failure_msg "$DESC is already running"
+    return 7
+  fi
+  # Wait for freeswitch to fully start
+  sleep 20
+  do_status >/dev/null 2>&1; state=$?;
+  if ((state == 0)); then
+    log_success_msg "Done"
+    return 0
+  else
+    echo -e "\r"
+    log_warning_msg "$DESC couldn't be started or is taking too long"
+    return 1
+  fi
 }
 
 #
 # Function that stops the daemon/service
 #
-do_stop()
-{
-	# Return
-	#   0 if daemon has been stopped
-	#   1 if daemon was already stopped
-	#   2 if daemon could not be stopped
-	#   other if a failure occurred
-	$DAEMON -stop
-	start-stop-daemon -d $WORKDIR -c $USER --stop --quiet --retry=TERM/30/KILL/5 --pidfile $PIDFILE --name $NAME
-	RETVAL="$?"
-	[ "$RETVAL" = 2 ] && return 2
-	# Wait for children to finish too if this is a daemon that forks
-	# and if the daemon is only ever run from this initscript.
-	# If the above conditions are not satisfied then add some other code
-	# that waits for the process to drop all resources that could be
-	# needed by services started subsequently.  A last resort is to
-	# sleep for some time.
-	start-stop-daemon -d $WORKDIR -c $USER --stop --quiet --oknodo --retry=0/30/KILL/5 --exec $DAEMON
-	[ "$?" = 2 ] && return 2
-	# Many daemons don't delete their pidfiles when they exit.
-	rm -f $PIDFILE
-	return "$RETVAL"
+do_stop() {
+  do_status >/dev/null 2>&1; state=$?;
+  if ((state == 0)); then
+    do_setlimits
+    $DAEMON -u $USER -g $GROUP -stop
+  else
+    echo -e "\r"
+    log_failure_msg "$DESC is not running"
+    return 7
+  fi
+  # Wait for freeswitch to fully stop
+  sleep 5
+  do_status >/dev/null 2>&1; state=$?;
+  if ((state == 3)); then
+    log_success_msg "Done"
+    return 0
+  else
+    echo -e "\r"
+    log_warning_msg "$DESC couldn't be stoped or is taking too long"
+    return 1
+  fi
 }
 
 #
-# Function that sends a SIGHUP to the daemon/service
+# Function that reloads the config files
 #
 do_reload() {
-	#
-	# If the daemon can reload its configuration without
-	# restarting (for example, when it is sent a SIGHUP),
-	# then implement that here.
-	#
-	start-stop-daemon -c $USER --stop --signal 1 --quiet --pidfile $PIDFILE --name $NAME
-	return 0
+  reload=$(fs_cli -x reloadxml 2>&1)
+  echo -e "\r"
+  if [[ $reload =~ "Success" ]]; then
+    log_success_msg "Done"
+    return 0
+  else
+    log_failure_msg "Error realoading configuration"
+    return 1
+  fi
+}
+
+#
+# Function that reloads the config files
+#
+do_status() {
+  status=$(fs_cli -x status 2>&1)
+  # Program is running
+  if [[ $status =~ UP ]]; then
+    log_success_msg "$DESC is up"
+    return 0
+  # Program is not running
+  elif [[ $status =~ ERROR ]]; then
+    # Program is not running and the PIDFILE exists
+    if [[ -f $PIDFILE ]]; then
+      log_failure_msg "$DESC is down and pid file still exists"
+      return 1
+    fi
+    log_failure_msg "$DESC is down"
+    return 3
+  # Unknown status
+  else
+    log_warning_msg "Unknown status of $DESC"
+    return 4
+  fi
 }
 
 case "$1" in
   start)
-	[ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME"
-	do_start
-	case "$?" in
-		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
-		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
-	esac
+    log_daemon_msg "Starting $DESC"
+    do_start
+    log_end_msg $?
 	;;
   stop)
-	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
-	do_stop
-	case "$?" in
-		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
-		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
-	esac
+    log_daemon_msg "Stopping $DESC"
+    do_stop
+    log_end_msg $?
 	;;
   reload|force-reload)
-	#
-	# If do_reload() is not implemented then leave this commented out
-	# and leave 'force-reload' as an alias for 'restart'.
-	#
-	log_daemon_msg "Reloading $DESC" "$NAME"
-	do_reload
-	log_end_msg $?
-	;;
+    log_daemon_msg "Reloading $DESC"
+    do_reload
+    log_end_msg $?
+  ;;
   restart)
-	#
-	# If the "reload" option is implemented then remove the
-	# 'force-reload' alias
-	#
-	log_daemon_msg "Restarting $DESC" "$NAME"
-	do_stop
-	case "$?" in
-	  0|1)
-		do_start
-		case "$?" in
-			0) log_end_msg 0 ;;
-			1) log_end_msg 1 ;; # Old process is still running
-			*) log_end_msg 1 ;; # Failed to start
-		esac
-		;;
-	  *)
-	  	# Failed to stop
-		log_end_msg 1
-		;;
-	esac
+    log_daemon_msg "Restarting $DESC"
+    do_stop
+    case "$?" in
+      0|7)
+        do_start
+        log_end_msg $?
+      ;;
+      1)
+        log_end_msg 1
+      ;;
+    esac
 	;;
+  status)
+    do_status
+    log_end_msg $?
+  ;;
   *)
-	echo "Usage: $SCRIPTNAME {start|stop|restart|reload|force-reload}" >&2
-	#echo "Usage: $SCRIPTNAME {start|stop|restart|force-reload}" >&2
-	exit 3
+    echo "Usage: $SCRIPTNAME {start|stop|restart|reload|force-reload}" >&2
+    exit 2
 	;;
 esac
-
-:
